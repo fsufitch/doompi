@@ -1,4 +1,4 @@
-APT_DEPENDENCIES = curl unzip qemu-system-arm virtinstall
+APT_DEPENDENCIES = curl unzip qemu-system-arm virtinstall libguestfs-tools
 RASPI_OS_URL = https://downloads.raspberrypi.org/raspios_lite_armhf/images/raspios_lite_armhf-2022-01-28/2022-01-28-raspios-bullseye-armhf-lite.zip
 VM_NAME = doompi-os
 
@@ -28,6 +28,32 @@ clean_image:
 
 .PHONY: init_image clean_image
 
+### BUILD HOST AND GUEST BUILDER BINARIES
+
+builder_host_bin = os/doompi-builder-host.bin
+builder_host_bin_fullpath = $(shell echo $$(pwd)/$(builder_host_bin))
+$(builder_host_bin): $(shell find builder-host/)
+	cd builder-host && go build -o $(builder_host_bin_fullpath)
+
+builder_guest_bin = os/doompi-builder-guest.bin
+builder_guest_bin_fullpath = $(shell echo $$(pwd)/$(builder_guest_bin))
+$(builder_guest_bin):
+	cd builder-guest && GOARCH=arm GOOS=linux go build -o '$(builder_guest_bin_fullpath)'
+
+builder_host: $(builder_host_bin)
+builder_guest: $(builder_guest_bin)
+builders: builder_host builder_guest
+clean_builders: $(shell find builder-guest/)
+	rm -f $(builder_host_bin) $(builder_guest_bin)
+.PHONY: builder_host builder_guest builders clean_builders
+
+### RUN HOST BUILDER
+
+buildenv = VM_NAME=$(VM_NAME) IMAGE=$(os_img) KERNEL=$(QEMU_RPI_KERNEL) DTB=$(QEMU_RPI_DTB) GUEST_BUILDER_BIN=$(builder_guest_bin)
+build: $(os_img) $(builder_host_bin) $(builder_guest_bin)
+	$(buildenv) $(builder_host_bin)
+.PHONY: build
+
 ### INSTALL THE VM
 
 run-vm: init_image
@@ -43,29 +69,16 @@ run-vm: init_image
 		-nographic -serial stdio -monitor none \
 		-no-reboot
 
-#		-drive 'filename=$(os_img),driver=file,index=0' \
-	# sudo -n virt-install \
-	# 	--name $(VM_NAME)  \
-  	# 	--arch armv6l \
-	# 	--cpu arm1176 \
-  	# 	--machine versatilepb \
-  	# 	--vcpus 1 \
-	# 	--memory 512 \
-  	# 	--import  \
-  	# 	--disk $(os_img),format=raw,bus=virtio \
-  	# 	--network bridge,source=virbr0,model=virtio  \
-  	# 	--video vga  \
-  	# 	--graphics spice \
-  	# 	--boot 'dtb=$(QEMU_RPI_DTB),kernel=$(QEMU_RPI_KERNEL),kernel_args=root=/dev/vda2 panic=1' \
-  	# 	--events on_reboot=destroy
-
 .PHONY: vm
 
 ### SYSTEM DEPENDENCIES
 
-dependencies:
+ensure-golang:
+	@go version || (echo "Could not run 'go', please install it to PATH." && exit 1)
+
+dependencies: ensure-golang
 	sudo -n apt-get install -qq $(APT_DEPENDENCIES)
-.PHONY: dependencies
+.PHONY: dependencies ensure-golang
 
 ### Default
 
